@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'files/**' # This is the folder where you will add your files
+      - 'files/**'
 
 jobs:
   update_storage_quota:
@@ -24,8 +24,8 @@ jobs:
       run: |
         # --- CONFIGURATION ---
         RESOURCE_GROUP="rg-container-app-storage-test-50"
-        STORAGE_ACCOUNT="<your-storage-account-name>"
-        FILE_SHARE="<your-file-share-name>"
+        STORAGE_ACCOUNT="myfilestorage"
+        FILE_SHARE="myfileshare"
         QUOTA_INCREASE_GB=5  # Increase quota by 5 GiB each time
 
         # Get the current size of all files in the designated folder (in GiB)
