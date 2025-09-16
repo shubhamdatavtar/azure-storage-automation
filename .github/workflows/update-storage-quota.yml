@@ -11,7 +11,7 @@ jobs:
     - name: Azure CLI Login
       uses: azure/login@v1
       with:
-        creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}", "clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}", "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
+        creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}", "clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}", "tenantId":"${{ secrets.AZURE_TENANT_ID }}", "subscriptionId":"aee14cc7-e140-4d76-a65e-b5cdb4a8b94f"}'
 
     - name: Increase Azure File Share Quota
       run: |
