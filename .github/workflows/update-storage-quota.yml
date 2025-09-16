@@ -1,289 +1,254 @@
-#!/bin/bash
+name: Update Azure Storage Quota
 
-# Configuration
-STORAGE_PATH="/mnt/storage"
-THRESHOLD=80  # Percentage threshold to trigger quota increase
-CHECK_INTERVAL=60  # Check every 60 seconds
-COOLDOWN_PERIOD=300  # Wait 5 minutes after triggering before checking again
+on:
+  repository_dispatch:
+    types: [storage_quota_increase]
+  workflow_dispatch:
+    inputs:
+      current_quota:
+        description: 'Current quota in GB'
+        required: true
+        type: number
+        default: 5
+      new_quota:
+        description: 'New quota in GB'
+        required: true
+        type: number
+        default: 10
+      reason:
+        description: 'Reason for quota increase'
+        required: false
+        type: string
+        default: 'Automatic quota increase due to high usage'
 
-# GitHub Configuration
-GITHUB_TOKEN="${GITHUB_TOKEN}"  # Fine-grained PAT or classic PAT
-REPO_OWNER="${REPO_OWNER}"
-REPO_NAME="${REPO_NAME}"
+env:
+  AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+  AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
+  AZURE_FILE_SHARE: ${{ secrets.AZURE_FILE_SHARE }}
 
-# Azure Configuration
-STORAGE_ACCOUNT="${STORAGE_ACCOUNT_NAME}"
-STORAGE_SHARE="${AZURE_FILE_SHARE}"
-STORAGE_KEY="${AZURE_STORAGE_KEY}"
-
-# Logging
-LOG_FILE="/mnt/storage/storage-monitor.log"
-CONTAINER_NAME="storage-automation"
-
-# Function to log messages with timestamp
-log_message() {
-    local message="$1"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$timestamp] $message" | tee -a "$LOG_FILE"
-}
-
-# Function to check if all required environment variables are set
-check_environment() {
-    local missing_vars=()
+jobs:
+  update-storage-quota:
+    runs-on: ubuntu-latest
+    name: Update Azure File Share Quota
     
-    [ -z "$GITHUB_TOKEN" ] && missing_vars+=("GITHUB_TOKEN")
-    [ -z "$REPO_OWNER" ] && missing_vars+=("REPO_OWNER") 
-    [ -z "$REPO_NAME" ] && missing_vars+=("REPO_NAME")
-    [ -z "$STORAGE_ACCOUNT" ] && missing_vars+=("STORAGE_ACCOUNT_NAME")
-    [ -z "$STORAGE_SHARE" ] && missing_vars+=("AZURE_FILE_SHARE")
-    [ -z "$STORAGE_KEY" ] && missing_vars+=("AZURE_STORAGE_KEY")
-    
-    if [ ${#missing_vars[@]} -gt 0 ]; then
-        log_message "ERROR: Missing required environment variables: ${missing_vars[*]}"
-        return 1
-    fi
-    
-    return 0
-}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-# Function to get current storage usage percentage
-get_storage_usage() {
-    if [ ! -d "$STORAGE_PATH" ]; then
-        log_message "ERROR: Storage path $STORAGE_PATH not found"
-        return 1
-    fi
-    
-    df "$STORAGE_PATH" | awk 'NR==2 {print int($5)}' 2>/dev/null
-}
-
-# Function to get storage usage details
-get_storage_details() {
-    if [ ! -d "$STORAGE_PATH" ]; then
-        return 1
-    fi
-    
-    df -h "$STORAGE_PATH" | awk 'NR==2 {
-        printf "Used: %s, Available: %s, Total: %s", $3, $4, $2
-    }' 2>/dev/null
-}
-
-# Function to get current quota from Azure
-get_current_quota() {
-    az storage share show \
-        --name "$STORAGE_SHARE" \
-        --account-name "$STORAGE_ACCOUNT" \
-        --account-key "$STORAGE_KEY" \
-        --query 'quota' \
-        --output tsv 2>/dev/null || echo "unknown"
-}
-
-# Function to calculate new quota (increase by 50%)
-calculate_new_quota() {
-    local current_quota=$1
-    echo $((current_quota + current_quota / 2))
-}
-
-# Function to trigger GitHub Action
-trigger_github_action() {
-    local current_quota=$1
-    local new_quota=$2
-    local usage_percent=$3
-    local storage_details="$4"
-    
-    log_message "Triggering GitHub Action to increase quota from ${current_quota}GB to ${new_quota}GB"
-    log_message "Storage details: $storage_details"
-    
-    # Create payload for repository_dispatch
-    local payload=$(cat <<EOF
-{
-    "event_type": "storage_quota_increase",
-    "client_payload": {
-        "current_quota": "$current_quota",
-        "new_quota": "$new_quota",
-        "usage_percent": "$usage_percent",
-        "container_name": "$CONTAINER_NAME",
-        "storage_account": "$STORAGE_ACCOUNT",
-        "file_share": "$STORAGE_SHARE",
-        "triggered_by": "automated_monitoring",
-        "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-        "storage_details": "$storage_details"
-    }
-}
-EOF
-    )
-    
-    # Trigger the GitHub Action
-    local response=$(curl -s -w "HTTPSTATUS:%{http_code}" -X POST \
-        -H "Authorization: token $GITHUB_TOKEN" \
-        -H "Accept: application/vnd.github.v3+json" \
-        -H "Content-Type: application/json" \
-        "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/dispatches" \
-        -d "$payload")
-    
-    local http_code=$(echo "$response" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
-    local body=$(echo "$response" | sed -e 's/HTTPSTATUS\:.*//g')
-    
-    if [ "$http_code" -eq 204 ]; then
-        log_message "✅ Successfully triggered GitHub Action (HTTP $http_code)"
-        return 0
-    else
-        log_message "❌ Failed to trigger GitHub Action (HTTP $http_code)"
-        log_message "Response body: $body"
-        return 1
-    fi
-}
-
-# Function to check if cooldown period is active
-is_cooldown_active() {
-    local cooldown_file="/tmp/storage_quota_cooldown"
-    
-    if [ -f "$cooldown_file" ]; then
-        local last_trigger=$(cat "$cooldown_file")
-        local current_time=$(date +%s)
-        local time_diff=$((current_time - last_trigger))
-        
-        if [ $time_diff -lt $COOLDOWN_PERIOD ]; then
-            local remaining=$((COOLDOWN_PERIOD - time_diff))
-            log_message "Cooldown active: ${remaining}s remaining"
-            return 0
+    - name: Log workflow trigger
+      run: |
+        if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+          echo "Triggered by repository_dispatch event"
+          echo "Event type: ${{ github.event.action }}"
+          echo "Current quota: ${{ github.event.client_payload.current_quota }}GB"
+          echo "New quota: ${{ github.event.client_payload.new_quota }}GB"
+          echo "Container: ${{ github.event.client_payload.container_name || 'storage-automation' }}"
         else
-            rm -f "$cooldown_file"
-            return 1
+          echo "Triggered manually via workflow_dispatch"
+          echo "Current quota: ${{ github.event.inputs.current_quota }}GB"
+          echo "New quota: ${{ github.event.inputs.new_quota }}GB"
+          echo "Reason: ${{ github.event.inputs.reason }}"
         fi
-    fi
-    
-    return 1
-}
 
-# Function to set cooldown
-set_cooldown() {
-    local cooldown_file="/tmp/storage_quota_cooldown"
-    date +%s > "$cooldown_file"
-}
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-# Function to perform health check
-health_check() {
-    log_message "Performing health check..."
-    
-    # Check if Azure CLI is available
-    if ! command -v az >/dev/null 2>&1; then
-        log_message "ERROR: Azure CLI not found"
-        return 1
-    fi
-    
-    # Check if storage path is accessible
-    if [ ! -d "$STORAGE_PATH" ]; then
-        log_message "ERROR: Storage path $STORAGE_PATH not accessible"
-        return 1
-    fi
-    
-    # Check if we can get quota information
-    local quota=$(get_current_quota)
-    if [ "$quota" = "unknown" ]; then
-        log_message "WARNING: Cannot retrieve quota information from Azure"
-        return 1
-    fi
-    
-    log_message "Health check passed - Current quota: ${quota}GB"
-    return 0
-}
+    - name: Verify Azure CLI login
+      run: |
+        az account show
+        echo "Successfully logged into Azure"
 
-# Main monitoring function
-monitor_storage() {
-    log_message "Starting storage monitoring..."
-    log_message "Configuration: Threshold=${THRESHOLD}%, Check interval=${CHECK_INTERVAL}s, Cooldown=${COOLDOWN_PERIOD}s"
-    log_message "Storage path: $STORAGE_PATH"
-    log_message "Azure Storage: $STORAGE_ACCOUNT/$STORAGE_SHARE"
-    log_message "GitHub repo: $REPO_OWNER/$REPO_NAME"
-    
-    # Perform initial health check
-    if ! health_check; then
-        log_message "Initial health check failed - some features may not work properly"
-    fi
-    
-    local health_check_counter=0
-    local health_check_interval=60  # Perform health check every 60 iterations (1 hour if check_interval=60)
-    
-    while true; do
-        # Periodic health check
-        if [ $((health_check_counter % health_check_interval)) -eq 0 ]; then
-            health_check
-        fi
-        health_check_counter=$((health_check_counter + 1))
+    - name: Get current storage usage and quota
+      id: storage_info
+      run: |
+        echo "Getting current storage information..."
         
-        # Get current storage usage
-        usage=$(get_storage_usage)
+        # Get current quota
+        CURRENT_QUOTA=$(az storage share show \
+          --name ${{ env.AZURE_FILE_SHARE }} \
+          --account-name ${{ env.AZURE_STORAGE_ACCOUNT }} \
+          --query 'quota' -o tsv)
         
-        if [ -z "$usage" ] || [ "$usage" -eq 0 ]; then
-            log_message "Unable to determine storage usage - skipping check"
-            sleep $CHECK_INTERVAL
-            continue
+        # Get current usage
+        USAGE_BYTES=$(az storage share stats \
+          --name ${{ env.AZURE_FILE_SHARE }} \
+          --account-name ${{ env.AZURE_STORAGE_ACCOUNT }} \
+          --query 'usage' -o tsv)
+        
+        # Convert usage to GB
+        USAGE_GB=$((USAGE_BYTES / 1024 / 1024 / 1024))
+        USAGE_PERCENTAGE=$((USAGE_GB * 100 / CURRENT_QUOTA))
+        
+        echo "current_quota=$CURRENT_QUOTA" >> $GITHUB_OUTPUT
+        echo "usage_gb=$USAGE_GB" >> $GITHUB_OUTPUT
+        echo "usage_percentage=$USAGE_PERCENTAGE" >> $GITHUB_OUTPUT
+        
+        echo "Current quota: ${CURRENT_QUOTA}GB"
+        echo "Current usage: ${USAGE_GB}GB (${USAGE_PERCENTAGE}%)"
+
+    - name: Determine new quota
+      id: quota_calculation
+      run: |
+        if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+          NEW_QUOTA="${{ github.event.client_payload.new_quota }}"
+          TRIGGER_QUOTA="${{ github.event.client_payload.current_quota }}"
+        else
+          NEW_QUOTA="${{ github.event.inputs.new_quota }}"
+          TRIGGER_QUOTA="${{ github.event.inputs.current_quota }}"
         fi
         
-        # Get storage details for logging
-        storage_details=$(get_storage_details)
+        CURRENT_QUOTA="${{ steps.storage_info.outputs.current_quota }}"
         
-        log_message "Current storage usage: ${usage}% ($storage_details)"
-        
-        # Check if usage exceeds threshold and cooldown is not active
-        if [ "$usage" -gt "$THRESHOLD" ]; then
-            log_message "⚠️  Storage usage ${usage}% exceeds threshold of ${THRESHOLD}%"
-            
-            if is_cooldown_active; then
-                log_message "Quota increase already triggered recently - waiting for cooldown"
-            else
-                log_message "Initiating quota increase process..."
-                
-                # Get current quota
-                current_quota=$(get_current_quota)
-                
-                if [ "$current_quota" != "unknown" ]; then
-                    # Calculate new quota
-                    new_quota=$(calculate_new_quota "$current_quota")
-                    
-                    log_message "Planning to increase quota: ${current_quota}GB → ${new_quota}GB"
-                    
-                    # Trigger GitHub Action
-                    if trigger_github_action "$current_quota" "$new_quota" "$usage" "$storage_details"; then
-                        set_cooldown
-                        log_message "Quota increase initiated successfully - entering cooldown period"
-                    else
-                        log_message "Failed to trigger quota increase"
-                    fi
-                else
-                    log_message "ERROR: Cannot retrieve current quota - skipping quota increase"
-                fi
-            fi
+        # Validate that new quota is larger than current
+        if [ "$NEW_QUOTA" -le "$CURRENT_QUOTA" ]; then
+          echo "Error: New quota ($NEW_QUOTA GB) must be larger than current quota ($CURRENT_QUOTA GB)"
+          exit 1
         fi
         
-        sleep $CHECK_INTERVAL
-    done
-}
+        # Validate that the trigger quota matches current quota (safety check)
+        if [ "$TRIGGER_QUOTA" != "$CURRENT_QUOTA" ]; then
+          echo "Warning: Trigger quota ($TRIGGER_QUOTA GB) doesn't match current quota ($CURRENT_QUOTA GB)"
+          echo "This might indicate the quota was already updated by another process"
+        fi
+        
+        echo "new_quota=$NEW_QUOTA" >> $GITHUB_OUTPUT
+        echo "Validated new quota: ${NEW_QUOTA}GB"
 
-# Signal handlers for graceful shutdown
-cleanup() {
-    log_message "Received shutdown signal - cleaning up..."
-    rm -f /tmp/storage_quota_cooldown
-    log_message "Storage monitoring stopped"
-    exit 0
-}
+    - name: Create backup of current file list (for verification)
+      id: backup
+      run: |
+        echo "Creating file list backup for verification..."
+        
+        BACKUP_FILE="file-list-$(date +%Y%m%d-%H%M%S).txt"
+        
+        az storage file list \
+          --share-name ${{ env.AZURE_FILE_SHARE }} \
+          --account-name ${{ env.AZURE_STORAGE_ACCOUNT }} \
+          --recursive \
+          --output table > "$BACKUP_FILE"
+        
+        FILE_COUNT=$(az storage file list \
+          --share-name ${{ env.AZURE_FILE_SHARE }} \
+          --account-name ${{ env.AZURE_STORAGE_ACCOUNT }} \
+          --recursive \
+          --query 'length(@)' -o tsv)
+        
+        echo "backup_file=$BACKUP_FILE" >> $GITHUB_OUTPUT
+        echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
+        echo "Created backup with $FILE_COUNT files listed"
 
-trap cleanup SIGTERM SIGINT
+    - name: Update storage quota
+      id: update_quota
+      run: |
+        echo "Updating storage quota from ${{ steps.storage_info.outputs.current_quota }}GB to ${{ steps.quota_calculation.outputs.new_quota }}GB"
+        
+        # Update the quota
+        az storage share update \
+          --name ${{ env.AZURE_FILE_SHARE }} \
+          --account-name ${{ env.AZURE_STORAGE_ACCOUNT }} \
+          --quota ${{ steps.quota_calculation.outputs.new_quota }}
+        
+        echo "Quota update command completed"
 
-# Main execution
-main() {
-    # Check if all required environment variables are set
-    if ! check_environment; then
-        log_message "Environment check failed - exiting"
-        exit 1
-    fi
-    
-    # Create log file if it doesn't exist
-    touch "$LOG_FILE"
-    
-    # Start monitoring
-    monitor_storage
-}
+    - name: Verify quota update
+      id: verify_update
+      run: |
+        echo "Verifying quota update..."
+        sleep 10  # Wait a moment for the update to propagate
+        
+        # Get the updated quota
+        UPDATED_QUOTA=$(az storage share show \
+          --name ${{ env.AZURE_FILE_SHARE }} \
+          --account-name ${{ env.AZURE_STORAGE_ACCOUNT }} \
+          --query 'quota' -o tsv)
+        
+        echo "Updated quota: ${UPDATED_QUOTA}GB"
+        echo "updated_quota=$UPDATED_QUOTA" >> $GITHUB_OUTPUT
+        
+        # Verify the quota was updated correctly
+        if [ "$UPDATED_QUOTA" != "${{ steps.quota_calculation.outputs.new_quota }}" ]; then
+          echo "ERROR: Quota update failed!"
+          echo "Expected: ${{ steps.quota_calculation.outputs.new_quota }}GB"
+          echo "Actual: ${UPDATED_QUOTA}GB"
+          exit 1
+        fi
+        
+        echo "✅ Quota successfully updated to ${UPDATED_QUOTA}GB"
 
-# Run main function
-main "$@"
+    - name: Verify data integrity
+      id: verify_integrity
+      run: |
+        echo "Verifying data integrity after quota update..."
+        
+        # Get current file count
+        CURRENT_FILE_COUNT=$(az storage file list \
+          --share-name ${{ env.AZURE_FILE_SHARE }} \
+          --account-name ${{ env.AZURE_STORAGE_ACCOUNT }} \
+          --recursive \
+          --query 'length(@)' -o tsv)
+        
+        ORIGINAL_FILE_COUNT="${{ steps.backup.outputs.file_count }}"
+        
+        echo "Original file count: $ORIGINAL_FILE_COUNT"
+        echo "Current file count: $CURRENT_FILE_COUNT"
+        
+        if [ "$CURRENT_FILE_COUNT" -lt "$ORIGINAL_FILE_COUNT" ]; then
+          echo "⚠️  WARNING: File count decreased from $ORIGINAL_FILE_COUNT to $CURRENT_FILE_COUNT"
+          echo "This might indicate data loss - please investigate immediately!"
+          # Don't exit here, just warn
+        else
+          echo "✅ Data integrity check passed - no files lost"
+        fi
+        
+        echo "current_file_count=$CURRENT_FILE_COUNT" >> $GITHUB_OUTPUT
+
+    - name: Generate summary report
+      run: |
+        echo "## 📊 Storage Quota Update Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Metric | Before | After |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|---------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| **Quota** | ${{ steps.storage_info.outputs.current_quota }}GB | ${{ steps.verify_update.outputs.updated_quota }}GB |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Usage** | ${{ steps.storage_info.outputs.usage_gb }}GB (${{ steps.storage_info.outputs.usage_percentage }}%) | ${{ steps.storage_info.outputs.usage_gb }}GB |" >> $GITHUB_STEP_SUMMARY
+        echo "| **File Count** | ${{ steps.backup.outputs.file_count }} | ${{ steps.verify_integrity.outputs.current_file_count }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📋 Details" >> $GITHUB_STEP_SUMMARY
+        echo "- **Storage Account**: ${{ env.AZURE_STORAGE_ACCOUNT }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **File Share**: ${{ env.AZURE_FILE_SHARE }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Resource Group**: ${{ env.AZURE_RESOURCE_GROUP }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Trigger**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+          echo "- **Container**: ${{ github.event.client_payload.container_name || 'storage-automation' }}" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- **Reason**: ${{ github.event.inputs.reason }}" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ **Status**: Quota successfully updated with no data loss detected" >> $GITHUB_STEP_SUMMARY
+
+    - name: Upload backup file as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: file-list-backup-${{ github.run_number }}
+        path: ${{ steps.backup.outputs.backup_file }}
+        retention-days: 30
+
+    - name: Cleanup
+      if: always()
+      run: |
+        echo "Cleaning up temporary files..."
+        rm -f file-list-*.txt
+        echo "Cleanup completed"
+
+    - name: Notify on failure
+      if: failure()
+      run: |
+        echo "🚨 Storage quota update failed!"
+        echo "Please check the logs and verify the storage account status manually."
+        echo "Storage Account: ${{ env.AZURE_STORAGE_ACCOUNT }}"
+        echo "File Share: ${{ env.AZURE_FILE_SHARE }}"
+        # You can add additional notification logic here (Slack, Teams, email, etc.)
