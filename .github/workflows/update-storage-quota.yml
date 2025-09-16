@@ -19,55 +19,11 @@ jobs:
         RESOURCE_GROUP="rg-container-app-storage-test-50"
         STORAGE_ACCOUNT="myfilestorage"
         FILE_SHARE="myfileshare"
-        QUOTA_INCREASE_GB=5  # Increase quota by 5 GiB each time
+        QUOTA_INCREASE_GB=5
 
-        # Get the current usage of the Azure File Share (in GiB)
         current_data_size_gb=$(az storage share show --name $FILE_SHARE --account-name $STORAGE_ACCOUNT --query 'usage' -o tsv)
-
-        # Get the current quota of the Azure File Share (in GiB)
         current_quota_gb=$(az storage share show --name $FILE_SHARE --account-name $STORAGE_ACCOUNT --query 'quota' -o tsv)
 
-        # Check if the total size of files is getting close to the quota (e.g., within 10%)
-        if (( $(echo "$current_data_size_gb > ($current_quota_gb * 0.9)" | bc -l) )); then
-          new_quota_gb=$(echo "$current_quota_gb + $QUOTA_INCREASE_GB" | bc)
-          echo "Current data size ($current_data_size_gb GiB) is approaching the quota ($current_quota_gb GiB)."
-          echo "Increasing file share quota to ${new_quota_gb} GiB..."
-          az storage share update --name $FILE_SHARE --account-name $STORAGE_ACCOUNT --quota "$new_quota_gb"
-          echo "File share quota updated successfully."
-        else
-          echo "Current data size ($current_data_size_gb GiB) is within the quota ($current_quota_gb GiB)."
-          echo "No quota update is needed."
-        fi
-      shell: bashname: Check and Increase Azure File Share Quota
-
-on:
-  workflow_dispatch:
-
-jobs:
-  update_storage_quota:
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Azure CLI Login
-      uses: azure/login@v1
-      with:
-        creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}", "clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}", "tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
-
-    - name: Increase Azure File Share Quota
-      run: |
-        # --- CONFIGURATION ---
-        RESOURCE_GROUP="rg-container-app-storage-test-50"
-        STORAGE_ACCOUNT="myfilestorage"
-        FILE_SHARE="myfileshare"
-        QUOTA_INCREASE_GB=5  # Increase quota by 5 GiB each time
-
-        # Get the current usage of the Azure File Share (in GiB)
-        current_data_size_gb=$(az storage share show --name $FILE_SHARE --account-name $STORAGE_ACCOUNT --query 'usage' -o tsv)
-
-        # Get the current quota of the Azure File Share (in GiB)
-        current_quota_gb=$(az storage share show --name $FILE_SHARE --account-name $STORAGE_ACCOUNT --query 'quota' -o tsv)
-
-        # Check if the total size of files is getting close to the quota (e.g., within 10%)
         if (( $(echo "$current_data_size_gb > ($current_quota_gb * 0.9)" | bc -l) )); then
           new_quota_gb=$(echo "$current_quota_gb + $QUOTA_INCREASE_GB" | bc)
           echo "Current data size ($current_data_size_gb GiB) is approaching the quota ($current_quota_gb GiB)."
