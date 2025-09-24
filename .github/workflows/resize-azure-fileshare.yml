@@ -1,0 +1,48 @@
+# .github/workflows/resize-azure-fileshare.yml
+
+name: Resize Azure File Share
+
+# This action is manually triggered
+on:
+  workflow_dispatch:
+    inputs:
+      storageAccountName:
+        description: 'Name of the Azure Storage Account'
+        required: true
+        type: string
+      fileShareName:
+        description: 'Name of the File Share to resize'
+        required: true
+        type: string
+      newSizeGb:
+        description: 'The new quota for the file share in Gibibytes (GiB)'
+        required: true
+        type: number
+
+jobs:
+  resize-file-share:
+    name: Resize Azure File Share
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 'Checkout repository'
+      uses: actions/checkout@v4
+
+    - name: 'Login to Azure'
+      uses: azure/login@v2
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: 'Resize the File Share with Azure CLI'
+      uses: azure/cli@v2
+      with:
+        inlineScript: |
+          echo "Attempting to resize file share '${{ inputs.fileShareName }}' in storage account '${{ inputs.storageAccountName }}' to ${{ inputs.newSizeGb }} GiB..."
+          
+          az storage share update \
+            --name "${{ inputs.fileShareName }}" \
+            --storage-account "${{ inputs.storageAccountName }}" \
+            --quota ${{ inputs.newSizeGb }} \
+            --output table
+
+          echo "File share resize command executed successfully."
