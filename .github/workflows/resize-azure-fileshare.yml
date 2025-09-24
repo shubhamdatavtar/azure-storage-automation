@@ -41,7 +41,7 @@ jobs:
           
           az storage share update \
             --name "${{ inputs.fileShareName }}" \
-            --storage-account "${{ inputs.storageAccountName }}" \
+            --account-name "${{ inputs.storageAccountName }}" \
             --quota ${{ inputs.newSizeGb }} \
             --output table
 
